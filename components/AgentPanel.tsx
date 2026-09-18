@@ -18,6 +18,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_series: "reading the time series",
   get_fires: "searching fire detections",
   upwind_fires: "checking upwind fires",
+  find_smoke_sources: "tracing smoke across the region",
   compare_to_normal: "comparing to normal",
   get_alerts: "checking weather alerts",
   find_conflicts: "checking sensor disagreement",

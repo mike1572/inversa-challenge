@@ -115,14 +115,32 @@ export async function* runAgent(
 
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
+      /**
+       * On the final turn the model is forbidden from calling more tools, so it
+       * must answer with what it has.
+       *
+       * Without this, a broad question ("is any Canadian smoke reaching the
+       * US") would walk the border station by station, exhaust the turn budget
+       * still mid-investigation, and leave the loop with no final message —
+       * which surfaced to the user as "Model did not return a parseable answer
+       * envelope". A partial answer with stated caveats beats an error.
+       */
+      const lastChance = turn === MAX_TURNS - 1;
+
       const stream = (await openai.responses.create({
         ...base,
         input,
         stream: true,
+        tool_choice: lastChance ? "none" : "auto",
       } as StreamEvent)) as unknown as AsyncIterable<StreamEvent>;
 
       const calls: { callId: string; name: string; args: string }[] = [];
       let sawOutput = false;
+
+      // Reset per turn: only the LAST turn's output is the envelope. Letting
+      // this accumulate would concatenate any earlier turn's text onto the
+      // JSON and break the parse.
+      finalText = "";
 
       for await (const event of stream) {
         if (event.type === "response.output_text.delta") {
@@ -226,7 +244,15 @@ export async function* runAgent(
     try {
       answer = JSON.parse(finalText) as AnswerEnvelope;
     } catch {
-      throw new Error("Model did not return a parseable answer envelope.");
+      // Say what actually went wrong. "Unparseable envelope" sent people
+      // looking at the schema when the real cause was running out of turns.
+      throw new Error(
+        finalText.trim().length === 0
+          ? `The agent used all ${MAX_TURNS} research steps without reaching an answer ` +
+            `(${evidenceCount} tool calls). The evidence it gathered is listed above — ` +
+            `try narrowing the question to a specific place or time.`
+          : "The agent's final message did not match the answer format.",
+      );
     }
 
     await sql(`update queries set answer = $2::jsonb where id = $1`, [

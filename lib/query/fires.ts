@@ -55,6 +55,168 @@ export async function getFires(opts: {
   }));
 }
 
+export interface SmokeSource {
+  stationId: number;
+  stationName: string;
+  pm25: number | null;
+  windFromDeg: number;
+  fireCount: number;
+  totalFrp: number;
+  nearestKm: number;
+  /** Fires upwind that lie outside US territory — i.e. Canadian or Mexican. */
+  foreignFireCount: number;
+  stationInUs: boolean;
+  /**
+   * True only for genuine cross-border transport: a station inside the US with
+   * fire upwind outside it.
+   *
+   * Without the station-side test this flag also fires for a Canadian station
+   * downwind of a Canadian fire, which is not smoke crossing a border at all —
+   * a trap the model had to notice and reason around on its own.
+   */
+  crossBorder: boolean;
+}
+
+export interface SmokeSourcesResult {
+  at: string;
+  stationsExamined: number;
+  rows: SmokeSource[];
+  note?: string;
+}
+
+/**
+ * The regional form of upwindFires: which stations in an area have fire upwind
+ * right now, and is that fire on the other side of the border?
+ *
+ * Exists because "is any Canadian smoke reaching the US" is a question about a
+ * whole region, and with only a per-station tool the agent was forced to walk
+ * the border one station at a time — it fetched 200 stations and then called
+ * upwind_fires repeatedly until it ran out of turns without ever answering.
+ *
+ * Cross-border attribution comes from the same US boundary polygon the coverage
+ * mask uses, so "this fire is outside the US" is decided by real geometry
+ * rather than by the model guessing from coordinates.
+ *
+ * Bounded by examining only the worst-air stations in the box: those are the
+ * ones the question is actually about, and it keeps the join from going
+ * quadratic across thousands of stations.
+ */
+export async function findSmokeSources(opts: {
+  bbox?: BBox;
+  at: Date;
+  hoursBack?: number;
+  sectorDeg?: number;
+  maxDistanceKm?: number;
+  stationLimit?: number;
+}): Promise<SmokeSourcesResult> {
+  const bbox = opts.bbox ?? config.regionBBox;
+  const hoursBack = Math.min(Math.max(opts.hoursBack ?? 24, 1), 72);
+  const sectorDeg = Math.min(Math.max(opts.sectorDeg ?? 60, 15), 180);
+  const maxDistanceKm = Math.min(opts.maxDistanceKm ?? 400, 1000);
+  const stationLimit = Math.min(opts.stationLimit ?? 40, 120);
+
+  const rows = await sql<{
+    id: string; name: string; pm25: number | null; from_dir: number;
+    fire_count: string; total_frp: number; nearest_km: number;
+    foreign_count: string; station_in_us: boolean;
+  }>(
+    `with candidates as (
+        select s.id, coalesce(s.name, 'Station ' || s.id) as name, s.geom, latest.value as pm25
+          from stations s
+          join lateral (
+             select o.value, o.observed_at
+               from observations o
+              where o.station_id = s.id and o.param = 'pm25' and o.value is not null
+                and o.observed_at <= $5::timestamptz
+                and o.observed_at >  $5::timestamptz - interval '6 hours'
+              order by o.observed_at desc limit 1
+          ) latest on true
+         where s.source_id = 'openaq'
+           and st_intersects(s.geom, st_makeenvelope($1, $2, $3, $4, 4326)::geography)
+         order by latest.value desc
+         limit $6
+     ),
+     with_wind as (
+        select c.*, d.value as from_dir
+          from candidates c
+          cross join lateral (
+             select g.id from stations g
+              where g.source_id = 'open_meteo'
+              order by g.geom <-> c.geom limit 1
+          ) g
+          join observations d
+            on d.station_id = g.id and d.param = 'wind_direction_10m'
+           and d.observed_at = date_trunc('hour', $5::timestamptz)
+     ),
+     us as (select coverage_geom from sources where id = 'nws')
+     select w.id, w.name, w.pm25, w.from_dir,
+            bool_or(us.coverage_geom is not null
+                    and st_intersects(w.geom, us.coverage_geom)) as station_in_us,
+            count(e.id)::text                                   as fire_count,
+            coalesce(sum((e.attrs->>'frp')::float), 0)          as total_frp,
+            min(st_distance(e.geom, w.geom)) / 1000.0           as nearest_km,
+            count(e.id) filter (
+              where us.coverage_geom is not null
+                and not st_intersects(e.geom, us.coverage_geom)
+            )::text                                             as foreign_count
+       from with_wind w
+       cross join us
+       join events e
+         on e.kind = 'fire_detection'
+        and e.valid_from between $5::timestamptz - make_interval(hours => $7) and $5::timestamptz
+        and st_dwithin(e.geom, w.geom, $8)
+        -- Same convention as upwindFires: wind_direction is where the wind
+        -- comes FROM, so the fire lies along that bearing, not opposite it.
+        and abs(((degrees(st_azimuth(w.geom::geometry, e.geom::geometry))
+                  - w.from_dir + 540)::numeric % 360) - 180) < $9 / 2.0
+      group by w.id, w.name, w.pm25, w.from_dir
+      order by coalesce(sum((e.attrs->>'frp')::float), 0) desc
+      limit 25`,
+    [
+      ...bbox,
+      opts.at.toISOString(),
+      stationLimit,
+      hoursBack,
+      maxDistanceKm * 1000,
+      sectorDeg,
+    ],
+  );
+
+  const out = rows.map((r) => ({
+    stationId: Number(r.id),
+    stationName: r.name,
+    pm25: r.pm25 === null ? null : Math.round(Number(r.pm25) * 10) / 10,
+    windFromDeg: Math.round(Number(r.from_dir)),
+    fireCount: Number(r.fire_count),
+    totalFrp: Math.round(Number(r.total_frp) * 10) / 10,
+    nearestKm: Math.round(Number(r.nearest_km)),
+    foreignFireCount: Number(r.foreign_count),
+    stationInUs: Boolean(r.station_in_us),
+    crossBorder: Boolean(r.station_in_us) && Number(r.foreign_count) > 0,
+  }));
+
+  const crossing = out.filter((r) => r.crossBorder);
+
+  return {
+    at: opts.at.toISOString(),
+    stationsExamined: stationLimit,
+    rows: out,
+    note:
+      out.length === 0
+        ? `No station among the worst-air ${stationLimit} in this box had any fire in its ` +
+          `${sectorDeg}° upwind sector within ${maxDistanceKm} km over the past ${hoursBack}h.`
+        : crossing.length > 0
+          ? `${crossing.length} of ${out.length} stations show genuine CROSS-BORDER transport: ` +
+            "the station is inside US territory and its upwind fires are outside it. " +
+            "Both sides of that test come from the national boundary, not from coordinates. " +
+            "Rows with foreignFireCount > 0 but stationInUs = false are a foreign station " +
+            "downwind of a foreign fire — not smoke crossing a border."
+          : "No cross-border transport found: every US station's upwind fires are also inside " +
+            "the US. Any foreignFireCount here belongs to stations that are themselves outside " +
+            "the US.",
+  };
+}
+
 export interface UpwindResult {
   stationId: number;
   stationName: string;

@@ -2,7 +2,7 @@ import type { BBox } from "../config";
 import { config } from "../config";
 import { getAlerts } from "../query/alerts";
 import { findConflicts, findUncorroboratedExtremes } from "../query/conflicts";
-import { getFires, upwindFires } from "../query/fires";
+import { findSmokeSources, getFires, upwindFires } from "../query/fires";
 import { getSourceHealth } from "../query/freshness";
 import { compareToNormal, getSeries } from "../query/series";
 import { findStations } from "../query/stations";
@@ -126,6 +126,30 @@ export const TOOL_DEFINITIONS = [
         hours_back: { type: ["integer", "null"], description: "1-72. Try 24." },
         sector_deg: { type: ["integer", "null"], description: "15-180. Try 60." },
         max_distance_km: { type: ["integer", "null"], description: "Try 300." },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    name: "find_smoke_sources",
+    strict: true,
+    description:
+      "REGIONAL version of upwind_fires, and the right tool for any question about " +
+      "an area rather than one place — a state, a border, a whole country. In ONE call " +
+      "it takes the worst-air stations in a box, finds which have fire upwind, and " +
+      "reports whether those fires are inside or outside US territory using the real " +
+      "national boundary. Use it for cross-border questions instead of checking " +
+      "stations one at a time; that does not finish.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["bbox", "at", "hours_back", "sector_deg", "max_distance_km"],
+      properties: {
+        bbox: { type: "array", items: num(), description: "[west,south,east,north]" },
+        at: { type: "string", description: "ISO 8601 UTC" },
+        hours_back: { type: ["integer", "null"], description: "1-72. Try 24." },
+        sector_deg: { type: ["integer", "null"], description: "15-180. Try 60." },
+        max_distance_km: { type: ["integer", "null"], description: "Try 400." },
       },
     },
   },
@@ -278,6 +302,17 @@ export const TOOL_HANDLERS: Record<string, Handler> = {
       return { rows: null, sourceIds: [], note: `No station with id ${a.station_id}.` };
     }
     return { ...result, rows: result.fires, sourceIds: ["firms", "open_meteo", "openaq"] };
+  },
+
+  async find_smoke_sources(a, ctx) {
+    const result = await findSmokeSources({
+      bbox: asBBox(a.bbox) ?? config.regionBBox,
+      at: parseDate(a.at, ctx.now),
+      hoursBack: a.hours_back ?? 24,
+      sectorDeg: a.sector_deg ?? 60,
+      maxDistanceKm: a.max_distance_km ?? 400,
+    });
+    return { ...result, sourceIds: ["firms", "open_meteo", "openaq", "nws"] };
   },
 
   async compare_to_normal(a, ctx) {
