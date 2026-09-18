@@ -1,26 +1,139 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/*
+ * Observatory console.
+ *
+ * The map is the darkest thing on screen; every panel sits ABOVE it on a
+ * graphite surface. That ordering is the whole design: chrome floats, data
+ * recedes, and nothing important is rendered in near-black on near-black.
+ */
+/* `inline` resolves these to literal values in the generated utilities, which
+   is right for fonts — they never change per subtree. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/*
+ * Colours are deliberately NOT inline: without it Tailwind emits
+ * `color: var(--color-ink)` rather than baking in the hex, so a subtree can
+ * redefine the variable and every utility inside follows. That is what lets
+ * .light-panel flip the whole agent panel without a second set of classes.
+ */
+@theme {
+  /* surfaces, back → front */
+  --color-base: #e7ecf3;
+  --color-surface: #ffffff;
+  --color-raised: #f2f5f9;
+  --color-hover: #e4e9f1;
+
+  /* hairlines */
+  --color-line: #d3dae4;
+  --color-line-soft: #e6eaf1;
+
+  /* type */
+  --color-ink: #12171f;
+  --color-ink-2: #46505e;
+  --color-ink-3: #6c7684;
+
+  /* the one accent, taken from fire — dark enough to pass as text on paper */
+  --color-ember: #b45309;
+  --color-ember-dim: #e9c9a4;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-base);
+  color: var(--color-ink);
+  font-family: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numeric readouts are monospaced everywhere — times, values, coordinates.
+   Tabular figures stop the timeline clock from jittering as it counts. */
+.tnum {
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Instrument label: small, wide, quiet. */
+.label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+/* Panels catch a little light from above, so they read as surfaces
+   rather than as flat fills. */
+.panel {
+  background:
+    linear-gradient(180deg, var(--panel-sheen, rgba(255, 255, 255, 0.035)), transparent 90px),
+    var(--color-surface);
+}
+
+/*
+ * The reading surface.
+ *
+ * Now that the whole interface is light this only lifts the agent panel to pure
+ * white against the app's cooler grey, so the reading column still separates
+ * from the map chrome around it.
+ */
+.light-panel {
+  --panel-sheen: rgba(15, 23, 42, 0.015);
+  --color-surface: #ffffff;
+  color: var(--color-ink);
+}
+
+/* Floating map chrome sits on the same surface, but translucent so the
+   data underneath stays faintly legible. */
+.chip {
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  border: 1px solid var(--color-line);
+  backdrop-filter: blur(10px);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-raised);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-hover);
+  background-clip: content-box;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.rise {
+  animation: rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
