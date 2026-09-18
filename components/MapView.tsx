@@ -79,10 +79,12 @@ export default function MapView({
   const focusStationId = useStore((s) => s.focusStationId);
   const setFocusStation = useStore((s) => s.setFocusStation);
   const flyToTarget = useStore((s) => s.flyToTarget);
+  const setViewBBox = useStore((s) => s.setViewBBox);
 
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW);
   const [appliedNonce, setAppliedNonce] = useState(0);
   const lastBBox = useRef<string>("");
+  const rootRef = useRef<HTMLDivElement>(null);
 
   /**
    * Carry out a camera request from the store. This is what makes an answer
@@ -412,6 +414,14 @@ export default function MapView({
         const key = bbox.map((n) => n.toFixed(1)).join(",");
         if (key !== lastBBox.current) {
           lastBBox.current = key;
+          // Two different consumers. The refetch decision is debounced and only
+          // cares about big moves; the timeline summary needs the viewport now,
+          // and recomputes from data already in memory.
+          // Mirrored onto the DOM so the viewport is inspectable without
+          // reaching into the store — set via the node rather than state so it
+          // costs no re-render on a gesture that fires every frame.
+          rootRef.current?.setAttribute("data-view", key);
+          setViewBBox(bbox);
           onViewportChange(bbox);
         }
       }}
@@ -471,7 +481,10 @@ export default function MapView({
         return null;
       }}
     >
-      <div className="bg-surface/85 text-ink-3 pointer-events-none absolute right-1 bottom-1 z-10 rounded px-1.5 py-0.5 text-[9px]">
+      <div
+        ref={rootRef}
+        className="bg-surface/85 text-ink-3 pointer-events-none absolute right-1 bottom-1 z-10 rounded px-1.5 py-0.5 text-[9px]"
+      >
         Basemap © Esri, HERE, Garmin, NGA, USGS
       </div>
     </DeckGL>

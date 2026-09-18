@@ -18,10 +18,12 @@ export default function Timeline() {
   const setCursorHour = useStore((s) => s.setCursorHour);
   const playing = useStore((s) => s.playing);
   const togglePlay = useStore((s) => s.togglePlay);
+  const startPlayback = useStore((s) => s.startPlayback);
   const setPlaying = useStore((s) => s.setPlaying);
   const speed = useStore((s) => s.speed);
   const setSpeed = useStore((s) => s.setSpeed);
   const stepCursor = useStore((s) => s.stepCursor);
+  const viewBBox = useStore((s) => s.viewBBox);
 
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -74,9 +76,57 @@ export default function Timeline() {
     setCursorHour(frac * (hours - 1));
   };
 
+  /**
+   * Recompute the strip for what is actually on screen.
+   *
+   * The server scopes `activity` to the bbox it was ASKED for, which is padded
+   * and often much larger than the viewport — and only refreshes when a zoom
+   * crosses a detail tier. So panning or zooming within a tier left the strip
+   * describing an area you were no longer looking at, while the legend claimed
+   * "in view".
+   *
+   * Every station and fire coordinate is already in the payload, so this is a
+   * single pass over data in memory: no request, and the strip tracks the map
+   * continuously instead of in jumps.
+   */
+  const activity = useMemo(() => {
+    if (!data) return { fires: [] as number[], maxPm25: [] as (number | null)[] };
+    if (!viewBBox) return data.activity;
+
+    const [w, s, e, n] = viewBBox;
+    const { hours } = data.meta;
+
+    const inView = (lon: number, lat: number) =>
+      lon >= w && lon <= e && lat >= s && lat <= n;
+
+    const fires = new Array<number>(hours).fill(0);
+    for (let i = 0; i < data.fires.lat.length; i++) {
+      if (!inView(data.fires.lon[i], data.fires.lat[i])) continue;
+      const h = data.fires.hour[i];
+      if (h >= 0 && h < hours) fires[h]++;
+    }
+
+    // Flag stations once, then walk the sparse readings.
+    const visible = new Uint8Array(data.stations.id.length);
+    for (let i = 0; i < visible.length; i++) {
+      visible[i] = inView(data.stations.lon[i], data.stations.lat[i]) ? 1 : 0;
+    }
+
+    const maxPm25 = new Array<number | null>(hours).fill(null);
+    for (let i = 0; i < data.pm25.value.length; i++) {
+      if (!visible[data.pm25.station[i]]) continue;
+      const h = data.pm25.hour[i];
+      const v = data.pm25.value[i];
+      if (h < 0 || h >= hours) continue;
+      if (maxPm25[h] === null || v > (maxPm25[h] as number)) maxPm25[h] = v;
+    }
+
+    return { fires, maxPm25 };
+  }, [data, viewBBox]);
+
   const maxFires = useMemo(
-    () => Math.max(1, ...(data?.activity.fires ?? [0])),
-    [data],
+    () => Math.max(1, ...(activity.fires.length ? activity.fires : [0])),
+    [activity],
   );
 
   const cursorDate = hourToDate(data, Math.round(cursorHour));
@@ -132,7 +182,7 @@ export default function Timeline() {
             the other by colour, so neither is mistaken for the other.
           */}
           <div className="absolute inset-x-0 top-0 bottom-[11px] flex items-end gap-px px-px">
-            {data?.activity.fires.map((count, h) => (
+            {activity.fires.map((count, h) => (
               <div
                 key={h}
                 className="flex-1"
@@ -151,7 +201,7 @@ export default function Timeline() {
             exists to find. The per-hour maximum ranges from 11 to 412.
           */}
           <div className="border-line-soft absolute inset-x-0 bottom-0 flex h-[11px] border-t px-px">
-            {data?.activity.maxPm25.map((pm, h) => (
+            {activity.maxPm25.map((pm, h) => (
               <div
                 key={h}
                 className="flex-1"
@@ -169,15 +219,32 @@ export default function Timeline() {
           />
         </div>
 
-        <div className="bg-raised border-line flex shrink-0 items-center gap-0.5 rounded-md border p-0.5">
+        {/*
+          The selected speed is a filled dark pill, not a faint tint. It was
+          bg-hover on bg-raised — about a 5% luminance step, which is invisible
+          at this size, so clicking appeared to do nothing even though the
+          playback rate was changing correctly.
+        */}
+        <div
+          className="bg-raised border-line flex shrink-0 items-center gap-0.5 rounded-md border p-0.5"
+          title="Playback speed — simulated hours per second"
+        >
           {[3, 6, 18].map((s) => (
             <button
               key={s}
-              onClick={() => setSpeed(s)}
-              className={`tnum rounded px-1.5 py-1 text-[10px] transition-colors ${
+              onClick={() => {
+                setSpeed(s);
+                // Picking a speed starts the replay. Otherwise the control does
+                // nothing at all unless playback happens to be running already,
+                // which is exactly how it read: dead.
+                if (!playing) startPlayback();
+              }}
+              aria-pressed={speed === s}
+              title={`Replay at ${s} hours per second`}
+              className={`tnum rounded px-2 py-1 text-[10px] transition-colors ${
                 speed === s
-                  ? "bg-hover text-ink"
-                  : "text-ink-3 hover:text-ink-2"
+                  ? "bg-ink font-semibold text-white shadow-sm"
+                  : "text-ink-3 hover:bg-hover hover:text-ink"
               }`}
             >
               {s}×
@@ -202,7 +269,7 @@ export default function Timeline() {
                 <span key={b.css} className="h-full flex-1" style={{ backgroundColor: b.css }} />
               ))}
             </span>
-            strip colour = worst air
+            strip colour = worst air in view
           </span>
           <span className="text-ink-3/70">← → step · space play</span>
         </span>

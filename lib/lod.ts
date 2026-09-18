@@ -19,6 +19,12 @@ export function spanOf(b: BBox): number {
   return Math.max(Math.abs(b[2] - b[0]), Math.abs(b[3] - b[1]));
 }
 
+/** Value equality for bounding boxes. */
+export function sameBBox(a: BBox | null | undefined, b: BBox | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
 /** True if `inner` lies entirely within `outer`. */
 export function containsBBox(outer: BBox, inner: BBox): boolean {
   return (

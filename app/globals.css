@@ -124,6 +124,52 @@ body {
   background-clip: content-box;
 }
 
+/* Thinking indicator. Staggered so it reads as activity rather than a blink. */
+@keyframes dot-pulse {
+  0%,
+  65%,
+  100% {
+    opacity: 0.22;
+    transform: translateY(0);
+  }
+  32% {
+    opacity: 1;
+    transform: translateY(-2.5px);
+  }
+}
+.dot {
+  animation: dot-pulse 1.25s ease-in-out infinite;
+}
+.dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+/* Caret trailing the answer while it is still being written. */
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+.caret {
+  animation: caret-blink 1s steps(1, end) infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 0.7s linear infinite;
+}
+
 @keyframes rise {
   from {
     opacity: 0;

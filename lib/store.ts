@@ -48,6 +48,15 @@ interface State {
    */
   flyToTarget: { bbox: BBox; nonce: number } | null;
 
+  /**
+   * What the map is currently showing.
+   *
+   * Distinct from `data.meta.bbox`, which is the (padded, possibly much larger)
+   * box the payload was fetched for. The timeline summarises what you can see,
+   * so it has to know the viewport rather than the fetch extent.
+   */
+  viewBBox: BBox | null;
+
   messages: AgentMessage[];
   activeEvidenceId: number | null;
 
@@ -58,11 +67,13 @@ interface State {
   stepCursor: (delta: number) => void;
   setPlaying: (v: boolean) => void;
   togglePlay: () => void;
+  startPlayback: () => void;
   setSpeed: (s: number) => void;
   toggleLayer: (k: LayerKey) => void;
   setLayers: (keys: LayerKey[]) => void;
   setFocusStation: (id: number | null) => void;
   flyTo: (bbox: BBox) => void;
+  setViewBBox: (b: BBox) => void;
 
   startMessage: (id: string, question: string) => void;
   patchMessage: (id: string, patch: Partial<AgentMessage>) => void;
@@ -83,6 +94,7 @@ export const useStore = create<State>((set, get) => ({
   layers: { fires: true, pm25: true, wind: false, alerts: true },
   focusStationId: null,
   flyToTarget: null,
+  viewBBox: null,
 
   messages: [],
   activeEvidenceId: null,
@@ -109,7 +121,26 @@ export const useStore = create<State>((set, get) => ({
   },
   stepCursor: (delta) => get().setCursorHour(get().cursorHour + delta),
   setPlaying: (v) => set({ playing: v }),
-  togglePlay: () => set((s) => ({ playing: !s.playing })),
+
+  /**
+   * Start playing, rewinding first if there is nothing left to play.
+   *
+   * The cursor opens at the newest hour that has data, so pressing play from a
+   * cold load had the loop hit its end condition on the first frame and stop —
+   * the replay feature appeared completely dead, and the speed buttons with it.
+   * Restarting from the beginning is what every media player does at the end of
+   * a track.
+   */
+  startPlayback: () => {
+    const { cursorHour, data } = get();
+    const max = (data?.meta.hours ?? 1) - 1;
+    set({ cursorHour: max - cursorHour < 2 ? 0 : cursorHour, playing: true });
+  },
+
+  togglePlay: () => {
+    if (get().playing) set({ playing: false });
+    else get().startPlayback();
+  },
   setSpeed: (speed) => set({ speed }),
 
   toggleLayer: (k) => set((s) => ({ layers: { ...s.layers, [k]: !s.layers[k] } })),
@@ -126,6 +157,7 @@ export const useStore = create<State>((set, get) => ({
   setFocusStation: (id) => set({ focusStationId: id }),
   flyTo: (bbox) =>
     set((s) => ({ flyToTarget: { bbox, nonce: (s.flyToTarget?.nonce ?? 0) + 1 } })),
+  setViewBBox: (viewBBox) => set({ viewBBox }),
 
   startMessage: (id, question) =>
     set((s) => ({

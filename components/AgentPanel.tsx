@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AnswerEnvelope } from "@/lib/agent/schema";
 import type { EvidenceRecord } from "@/lib/agent/run";
+import { partialProse } from "@/lib/partial-json";
 import { useStore, type AgentMessage } from "@/lib/store";
 
 const SUGGESTIONS = [
@@ -41,14 +42,43 @@ export default function AgentPanel({
   const busy = messages.some((m) => m.streaming);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Follow the transcript, but only while the reader is already at the bottom.
+   *
+   * With the composer pinned below, a streaming answer grows downward out of
+   * view; without this the text arrives where nobody is looking. Yanking the
+   * view back when someone has deliberately scrolled up to re-read an earlier
+   * answer is worse than not following at all, so the pin is released as soon
+   * as they scroll away and restored when they come back.
+   */
+  const pinned = useRef(true);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+  };
+
+  // Cheap proxy for "the transcript changed": length of everything rendered.
+  const contentTick = messages.reduce(
+    (n, m) => n + m.prose.length + m.evidence.length + (m.answer ? 1 : 0),
+    0,
+  );
+
+  useEffect(() => {
+    if (!pinned.current) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [contentTick, messages.length]);
+
   const ask = async (question: string) => {
     if (!question.trim() || busy) return;
     const id = crypto.randomUUID();
     startMessage(id, question);
     setInput("");
-    requestAnimationFrame(() =>
-      scrollRef.current?.scrollTo({ top: 1e6, behavior: "smooth" }),
-    );
+    // Asking re-pins: you always want to see your own question land, even if
+    // you had scrolled up to re-read something. The effect does the scrolling.
+    pinned.current = true;
 
     try {
       const res = await fetch("/api/ask", {
@@ -133,55 +163,27 @@ export default function AgentPanel({
 
   return (
     <div className="panel flex h-full flex-col">
-      {/*
-        The composer lives at the TOP, not pinned to the bottom of a long
-        column. Below the fold and rendered in near-black it read as a disabled
-        footer, and people clicked only the suggestions — which then look like
-        the sole way in. Here it is the first thing in the panel, on a raised
-        surface with a real submit control, and the suggestions sit underneath
-        as alternatives.
-      */}
-      <div className="border-line-soft border-b px-3 pt-3 pb-3">
-        <label htmlFor="ask" className="label">
-          Ask
-        </label>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            ask(input);
-          }}
-          className="mt-2 flex items-center gap-1.5"
-        >
-          <div className="focus-within:border-ember/70 focus-within:bg-hover bg-raised border-line flex flex-1 items-center rounded-md border transition-colors">
-            <input
-              id="ask"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={busy ? "Working…" : "Ask about smoke, fires or air quality"}
-              disabled={busy}
-              autoComplete="off"
-              className="text-ink placeholder:text-ink-3 w-full bg-transparent px-2.5 py-2 text-[12.5px] focus:outline-none disabled:opacity-60"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={busy || !input.trim()}
-            aria-label="Ask"
-            className="bg-ember hover:bg-ember/90 disabled:bg-raised disabled:text-ink-3 border-line grid h-[34px] w-[34px] shrink-0 place-items-center rounded-md border border-transparent text-[15px] leading-none font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:border-solid"
-          >
-            ↵
-          </button>
-        </form>
-
-        <div className="text-ink-3 mt-1.5 text-[10px] leading-snug">
-          Every figure is cited — click a citation to see the source data.
-        </div>
+      <div className="border-line-soft flex items-baseline justify-between gap-2 border-b px-3 py-2">
+        <span className="label">Ask</span>
+        <span className="text-ink-3 text-[10px] leading-tight">
+          every figure is cited — click one for its source
+        </span>
       </div>
 
-      <div ref={scrollRef} className="flex-1 space-y-5 overflow-y-auto px-3 py-3">
+      {/*
+        Transcript scrolls, composer is pinned below it — the arrangement every
+        chat uses, so nobody has to be taught where to type. With nothing asked
+        yet the suggestions sit at the BOTTOM of the scroll area (mt-auto) so
+        they rest just above the composer, rather than stranded at the top of an
+        otherwise empty column.
+      */}
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-3"
+      >
         {messages.length === 0 && (
-          <div className="space-y-2">
+          <div className="mt-auto space-y-2">
             <div className="label">Try</div>
             <div className="space-y-1.5">
               {SUGGESTIONS.map((s, i) => (
@@ -202,6 +204,38 @@ export default function AgentPanel({
           <Message key={m.id} m={m} onEvidence={setActiveEvidence} />
         ))}
       </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          ask(input);
+        }}
+        className="border-line-soft flex items-center gap-1.5 border-t p-2.5"
+      >
+        <div className="focus-within:border-ember/70 focus-within:bg-surface bg-raised border-line flex flex-1 items-center rounded-md border transition-colors">
+          <input
+            id="ask"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={busy ? "Working…" : "Ask about smoke, fires or air quality"}
+            disabled={busy}
+            autoComplete="off"
+            className="text-ink placeholder:text-ink-3 w-full bg-transparent px-2.5 py-2 text-[12.5px] focus:outline-none disabled:opacity-60"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy || !input.trim()}
+          aria-label="Ask"
+          className="bg-ember hover:bg-ember/90 disabled:bg-raised disabled:text-ink-3 border-line grid h-[34px] w-[34px] shrink-0 place-items-center rounded-md border border-transparent text-[15px] leading-none font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:border-solid"
+        >
+          {busy ? (
+            <span className="spin border-ink-3 inline-block h-3.5 w-3.5 rounded-full border-2 border-t-transparent" />
+          ) : (
+            "↵"
+          )}
+        </button>
+      </form>
     </div>
   );
 }
@@ -214,6 +248,7 @@ function Message({
   onEvidence: (id: number) => void;
 }) {
   const byLabel = new Map(m.evidence.map((e) => [e.label, e]));
+  const streamed = m.answer ? "" : partialProse(m.prose);
 
   return (
     <div className="border-line-soft space-y-2.5 border-l-2 pl-3">
@@ -234,17 +269,29 @@ function Message({
         </div>
       )}
 
-      {m.status && (
-        <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
-          <span className="bg-ember inline-block h-1.5 w-1.5 animate-pulse rounded-full" />
-          {m.status}…
+      {/*
+        There is always an indicator while a request is in flight. Previously
+        this hung off `status` alone, which is cleared each time evidence lands
+        — so the panel went completely blank between finishing one tool and
+        starting the next, and again for the whole gap between submitting and
+        the first tool call.
+      */}
+      {m.streaming && !streamed && (
+        <div className="text-ink-3 flex items-center gap-2 text-[11px]">
+          <Dots />
+          <span>{m.status ?? (m.evidence.length > 0 ? "reading results" : "thinking")}</span>
         </div>
       )}
 
       {m.answer ? (
         <Prose text={m.answer.prose} byLabel={byLabel} onEvidence={onEvidence} />
       ) : (
-        m.prose && <div className="text-ink-3 text-[12px] leading-relaxed">…</div>
+        streamed && (
+          <div className="text-ink-2 text-[12.5px] leading-[1.65]">
+            {streamed}
+            <span className="caret text-ember ml-0.5">▍</span>
+          </div>
+        )
       )}
 
       {m.answer && m.answer.caveats.length > 0 && (
@@ -267,6 +314,16 @@ function Message({
         </div>
       )}
     </div>
+  );
+}
+
+function Dots() {
+  return (
+    <span className="flex items-center gap-[3px]" aria-hidden>
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="dot bg-ember h-[3px] w-[3px] rounded-full" />
+      ))}
+    </span>
   );
 }
 
