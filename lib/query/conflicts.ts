@@ -1,4 +1,5 @@
 import { sql } from "../db";
+import { isMonitor, round1, stationName } from "./sql";
 
 export interface Conflict {
   at: string;
@@ -36,12 +37,12 @@ export async function findConflicts(opts: {
     meters: number; pct: number;
   }>(
     `select a.observed_at,
-            sa.id as a_id, coalesce(sa.name, 'Station ' || sa.id) as a_name,
+            sa.id as a_id, ${stationName("sa")} as a_name,
             a.value as a_val,
-            coalesce((sa.metadata->>'isMonitor')::boolean, false) as a_monitor,
-            sb.id as b_id, coalesce(sb.name, 'Station ' || sb.id) as b_name,
+            ${isMonitor("sa")} as a_monitor,
+            sb.id as b_id, ${stationName("sb")} as b_name,
             b.value as b_val,
-            coalesce((sb.metadata->>'isMonitor')::boolean, false) as b_monitor,
+            ${isMonitor("sb")} as b_monitor,
             st_distance(sa.geom, sb.geom) as meters,
             abs(a.value - b.value) / nullif(greatest(a.value, b.value), 0) as pct
        from observations a
@@ -77,13 +78,13 @@ export async function findConflicts(opts: {
     a: {
       stationId: Number(r.a_id),
       name: r.a_name,
-      value: Math.round(Number(r.a_val) * 10) / 10,
+      value: round1(Number(r.a_val)),
       isMonitor: r.a_monitor,
     },
     b: {
       stationId: Number(r.b_id),
       name: r.b_name,
-      value: Math.round(Number(r.b_val) * 10) / 10,
+      value: round1(Number(r.b_val)),
       isMonitor: r.b_monitor,
     },
     distanceMeters: Math.round(Number(r.meters)),
@@ -130,10 +131,10 @@ export async function findUncorroboratedExtremes(opts: {
     monitor: boolean; history_tier: string; neighbours: string;
   }>(
     `select s.id,
-            coalesce(s.name, 'Station ' || s.id) as name,
+            ${stationName("s")} as name,
             o.value,
             o.observed_at,
-            coalesce((s.metadata->>'isMonitor')::boolean, false) as monitor,
+            ${isMonitor("s")} as monitor,
             s.history_tier,
             n.neighbours
        from observations o
@@ -168,7 +169,7 @@ export async function findUncorroboratedExtremes(opts: {
   return rows.map((r) => ({
     stationId: Number(r.id),
     name: r.name,
-    value: Math.round(Number(r.value) * 10) / 10,
+    value: round1(Number(r.value)),
     at: r.observed_at.toISOString(),
     isMonitor: r.monitor,
     historyTier: r.history_tier,

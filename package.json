@@ -12,7 +12,8 @@
     "backfill": "tsx scripts/backfill.ts",
     "health": "tsx scripts/health.ts",
     "verify:upwind": "tsx scripts/verify-upwind.ts",
-    "coverage": "tsx scripts/set-coverage.ts"
+    "coverage": "tsx scripts/set-coverage.ts",
+    "check": "tsx scripts/check-pure.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.4.0",

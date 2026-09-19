@@ -75,7 +75,7 @@ function bbox4dp(): string {
   return config.regionBBox.map((n) => n.toFixed(4)).join(",");
 }
 
-export interface DiscoveredSensor {
+interface DiscoveredSensor {
   locationId: number;
   sensorId: number;
   name: string;
@@ -89,7 +89,7 @@ export interface DiscoveredSensor {
  * Page through every PM2.5 location in the region.
  * Dead sensors are most of the long tail, so callers filter on lastSeen.
  */
-export async function discoverSensors(): Promise<{
+async function discoverSensors(): Promise<{
   sensors: DiscoveredSensor[];
   requests: Awaited<ReturnType<typeof fetchText>>[];
 }> {

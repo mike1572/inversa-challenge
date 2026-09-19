@@ -5,7 +5,7 @@ import { openMeteo } from "./openmeteo";
 import type { SourceAdapter } from "./types";
 
 /** Adding a fifth feed is one file plus one line here. */
-export const ADAPTERS: Record<string, SourceAdapter> = {
+const ADAPTERS: Record<string, SourceAdapter> = {
   firms,
   openaq,
   open_meteo: openMeteo,

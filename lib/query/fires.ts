@@ -1,5 +1,6 @@
 import { config, type BBox } from "../config";
 import { sql } from "../db";
+import { bboxEnvelope, frp, lat, lon, round1, stationName } from "./sql";
 
 export interface FireHit {
   lat: number;
@@ -22,9 +23,9 @@ export async function getFires(opts: {
     lat: number; lon: number; frp: number; valid_from: Date;
     confidence: string | null; satellite: string | null;
   }>(
-    `select st_y(e.geom::geometry) as lat,
-            st_x(e.geom::geometry) as lon,
-            coalesce((e.attrs->>'frp')::float, 0) as frp,
+    `select ${lat("e")} as lat,
+            ${lon("e")} as lon,
+            ${frp("e")} as frp,
             e.valid_from,
             e.attrs->>'confidence' as confidence,
             e.attrs->>'satellite'  as satellite
@@ -32,9 +33,9 @@ export async function getFires(opts: {
       where e.kind = 'fire_detection'
         and e.valid_from >= $5::timestamptz
         and e.valid_from <  $6::timestamptz
-        and coalesce((e.attrs->>'frp')::float, 0) >= $7
-        and st_intersects(e.geom, st_makeenvelope($1, $2, $3, $4, 4326)::geography)
-      order by coalesce((e.attrs->>'frp')::float, 0) desc
+        and ${frp("e")} >= $7
+        and st_intersects(e.geom, ${bboxEnvelope()})
+      order by ${frp("e")} desc
       limit $8`,
     [
       ...bbox,
@@ -121,7 +122,7 @@ export async function findSmokeSources(opts: {
     foreign_count: string; station_in_us: boolean;
   }>(
     `with candidates as (
-        select s.id, coalesce(s.name, 'Station ' || s.id) as name, s.geom, latest.value as pm25
+        select s.id, ${stationName("s")} as name, s.geom, latest.value as pm25
           from stations s
           join lateral (
              select o.value, o.observed_at
@@ -132,7 +133,7 @@ export async function findSmokeSources(opts: {
               order by o.observed_at desc limit 1
           ) latest on true
          where s.source_id = 'openaq'
-           and st_intersects(s.geom, st_makeenvelope($1, $2, $3, $4, 4326)::geography)
+           and st_intersects(s.geom, ${bboxEnvelope()})
          order by latest.value desc
          limit $6
      ),
@@ -153,7 +154,7 @@ export async function findSmokeSources(opts: {
             bool_or(us.coverage_geom is not null
                     and st_intersects(w.geom, us.coverage_geom)) as station_in_us,
             count(e.id)::text                                   as fire_count,
-            coalesce(sum((e.attrs->>'frp')::float), 0)          as total_frp,
+            coalesce(sum(${frp("e")}), 0)          as total_frp,
             min(st_distance(e.geom, w.geom)) / 1000.0           as nearest_km,
             count(e.id) filter (
               where us.coverage_geom is not null
@@ -170,7 +171,7 @@ export async function findSmokeSources(opts: {
         and abs(((degrees(st_azimuth(w.geom::geometry, e.geom::geometry))
                   - w.from_dir + 540)::numeric % 360) - 180) < $9 / 2.0
       group by w.id, w.name, w.pm25, w.from_dir
-      order by coalesce(sum((e.attrs->>'frp')::float), 0) desc
+      order by coalesce(sum(${frp("e")}), 0) desc
       limit 25`,
     [
       ...bbox,
@@ -185,10 +186,10 @@ export async function findSmokeSources(opts: {
   const out = rows.map((r) => ({
     stationId: Number(r.id),
     stationName: r.name,
-    pm25: r.pm25 === null ? null : Math.round(Number(r.pm25) * 10) / 10,
+    pm25: r.pm25 === null ? null : round1(Number(r.pm25)),
     windFromDeg: Math.round(Number(r.from_dir)),
     fireCount: Number(r.fire_count),
-    totalFrp: Math.round(Number(r.total_frp) * 10) / 10,
+    totalFrp: round1(Number(r.total_frp)),
     nearestKm: Math.round(Number(r.nearest_km)),
     foreignFireCount: Number(r.foreign_count),
     stationInUs: Boolean(r.station_in_us),
@@ -264,9 +265,9 @@ export async function upwindFires(opts: {
   const at = opts.at;
 
   const stationRows = await sql<{ id: string; name: string; lat: number; lon: number }>(
-    `select id, coalesce(name, 'Station ' || id) as name,
-            st_y(geom::geometry) as lat, st_x(geom::geometry) as lon
-       from stations where id = $1`,
+    `select s.id, ${stationName("s")} as name,
+            ${lat("s")} as lat, ${lon("s")} as lon
+       from stations s where s.id = $1`,
     [opts.stationId],
   );
   if (stationRows.length === 0) return null;
@@ -327,9 +328,9 @@ export async function upwindFires(opts: {
     lat: number; lon: number; frp: number; valid_from: Date;
     km: number; bearing: number;
   }>(
-    `select st_y(e.geom::geometry) as lat,
-            st_x(e.geom::geometry) as lon,
-            coalesce((e.attrs->>'frp')::float, 0) as frp,
+    `select ${lat("e")} as lat,
+            ${lon("e")} as lon,
+            ${frp("e")} as frp,
             e.valid_from,
             st_distance(e.geom, s.geom) / 1000.0 as km,
             degrees(st_azimuth(s.geom::geometry, e.geom::geometry)) as bearing
@@ -343,7 +344,7 @@ export async function upwindFires(opts: {
         -- the wind is coming FROM. No 180 flip: see the note above.
         and abs(((degrees(st_azimuth(s.geom::geometry, e.geom::geometry))
                   - $5 + 540)::numeric % 360) - 180) < $6 / 2.0
-      order by coalesce((e.attrs->>'frp')::float, 0)
+      order by ${frp("e")}
                / greatest(st_distance(e.geom, s.geom) / 1000.0, 1) desc
       limit 25`,
     [
@@ -367,7 +368,7 @@ export async function upwindFires(opts: {
     fires: fireRows.map((r) => ({
       lat: Number(r.lat),
       lon: Number(r.lon),
-      frp: Math.round(Number(r.frp) * 10) / 10,
+      frp: round1(Number(r.frp)),
       at: r.valid_from.toISOString(),
       distanceKm: Math.round(Number(r.km)),
       bearingDeg: Math.round(Number(r.bearing)),

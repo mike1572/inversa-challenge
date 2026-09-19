@@ -12,6 +12,7 @@ import {
 } from "@deck.gl/layers";
 import { TileLayer } from "@deck.gl/geo-layers";
 import { clampBBox } from "@/lib/lod";
+import { buildPmGrid } from "@/lib/pm-grid";
 import { aqiBand, fireColor, fireRadius } from "@/lib/aqi";
 import { useStore } from "@/lib/store";
 
@@ -37,9 +38,6 @@ const BASEMAP_LABELS =
 
 /** NWS coverage stops here; everything else gets the "no coverage" mask. */
 const CONUS: [number, number, number, number] = [-125, 24, -66.5, 49.5];
-
-/** How long a PM2.5 reading stays on screen before the station goes hollow. */
-const CARRY_HOURS = 3;
 
 const INITIAL_VIEW: MapViewState = {
   longitude: -100,
@@ -103,53 +101,7 @@ export default function MapView({
     } as MapViewState);
   }
 
-  /**
-   * Dense PM2.5 lookup, built ONCE when the payload lands.
-   *
-   * The payload is sparse triples; scanning them per frame would be O(n) at
-   * 60fps. A station-major Float32Array makes the accessor an O(1) index, which
-   * is what keeps scrubbing smooth with a couple of thousand stations.
-   *
-   * Values are carried FORWARD up to CARRY_HOURS, because stations report
-   * hourly and arrive minutes late: requiring an exact hour match leaves most
-   * of the map blank at any given instant (measured: 0% of stations had a value
-   * at the newest hour, 64% one hour back). A reading from an hour ago is still
-   * that station's current measurement, so this shows what is known rather than
-   * inventing anything — nothing is ever carried BACKWARD to before a station
-   * first reported, and `age` travels alongside so the UI can dim it and the
-   * tooltip can name the real observation time.
-   */
-  const { pmGrid, pmAge } = useMemo(() => {
-    if (!data) return { pmGrid: null, pmAge: null };
-    const { hours } = data.meta;
-    const n = data.stations.id.length;
-    const grid = new Float32Array(n * hours).fill(NaN);
-    for (let i = 0; i < data.pm25.station.length; i++) {
-      grid[data.pm25.station[i] * hours + data.pm25.hour[i]] = data.pm25.value[i];
-    }
-
-    const age = new Uint8Array(n * hours).fill(255);
-    for (let s = 0; s < n; s++) {
-      const base = s * hours;
-      let carried = NaN;
-      let carriedAge = 0;
-      for (let h = 0; h < hours; h++) {
-        const v = grid[base + h];
-        if (!Number.isNaN(v)) {
-          carried = v;
-          carriedAge = 0;
-        } else if (!Number.isNaN(carried) && carriedAge < CARRY_HOURS) {
-          carriedAge++;
-          grid[base + h] = carried;
-        } else {
-          carried = NaN;
-          continue;
-        }
-        age[base + h] = carriedAge;
-      }
-    }
-    return { pmGrid: grid, pmAge: age };
-  }, [data]);
+  const { grid: pmGrid, age: pmAge } = useMemo(() => buildPmGrid(data), [data]);
 
   const stationPoints = useMemo(() => {
     if (!data) return [];

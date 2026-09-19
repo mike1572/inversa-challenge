@@ -1,5 +1,6 @@
 import { config, type BBox } from "../config";
 import { sql } from "../db";
+import { bboxEnvelope, isMonitor, lat, lon, stationName } from "./sql";
 
 export interface StationHit {
   id: number;
@@ -39,7 +40,7 @@ export async function findStations(opts: {
         args: [opts.lon, opts.lat, (opts.radiusKm ?? 50) * 1000] as unknown[],
       }
     : {
-        where: `st_intersects(s.geom, st_makeenvelope($1, $2, $3, $4, 4326)::geography)`,
+        where: `st_intersects(s.geom, ${bboxEnvelope()})`,
         orderBy: `latest.observed_at desc nulls last`,
         args: [...(opts.bbox ?? config.regionBBox)] as unknown[],
       };
@@ -50,11 +51,11 @@ export async function findStations(opts: {
     value: number | null; observed_at: Date | null;
   }>(
     `select s.id,
-            coalesce(s.name, 'Station ' || s.id) as name,
-            st_y(s.geom::geometry) as lat,
-            st_x(s.geom::geometry) as lon,
+            ${stationName("s")} as name,
+            ${lat("s")} as lat,
+            ${lon("s")} as lon,
             s.history_tier,
-            coalesce((s.metadata->>'isMonitor')::boolean, false) as monitor,
+            ${isMonitor("s")} as monitor,
             latest.value,
             latest.observed_at
        from stations s

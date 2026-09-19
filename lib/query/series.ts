@@ -1,4 +1,5 @@
 import { sql } from "../db";
+import { round1, stationName } from "./sql";
 
 export interface SeriesPoint {
   t: string;
@@ -36,7 +37,7 @@ export async function getSeries(opts: {
     observed_at: Date; value: number | null; unit: string;
   }>(
     `select o.station_id,
-            coalesce(s.name, 'Station ' || s.id) as name,
+            ${stationName("s")} as name,
             s.history_tier,
             o.observed_at, o.value, o.unit
        from observations o
@@ -52,7 +53,7 @@ export async function getSeries(opts: {
   // Stations with no rows at all must still come back, so the agent learns the
   // difference between "no data" and "station doesn't exist".
   const meta = await sql<{ id: string; name: string; history_tier: "A" | "B" }>(
-    `select id, coalesce(name, 'Station ' || id) as name, history_tier
+    `select id, ${stationName("stations")} as name, history_tier
        from stations where id = any($1::bigint[])`,
     [opts.stationIds],
   );
@@ -142,7 +143,7 @@ export async function compareToNormal(opts: {
   at: Date;
 }): Promise<NormalComparison | null> {
   const meta = await sql<{ id: string; name: string }>(
-    `select id, coalesce(name, 'Station ' || id) as name from stations where id = $1`,
+    `select id, ${stationName("stations")} as name from stations where id = $1`,
     [opts.stationId],
   );
   if (meta.length === 0) return null;
@@ -205,7 +206,7 @@ export async function compareToNormal(opts: {
     value,
     at: (r.observed_at ?? opts.at).toISOString(),
     percentile: pct,
-    median: r.med === null ? null : Math.round(Number(r.med) * 10) / 10,
+    median: r.med === null ? null : round1(Number(r.med)),
     sampleSize: n,
     verdict,
     note:

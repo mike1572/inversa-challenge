@@ -1,5 +1,6 @@
 import { config, type BBox } from "../config";
 import { sql } from "../db";
+import { bboxEnvelope } from "./sql";
 
 export interface AlertHit {
   id: number;
@@ -42,7 +43,7 @@ export async function getAlerts(opts: {
   const coverage = await sql<{ covered: boolean; note: string | null }>(
     `select (s.coverage_geom is null
              or st_intersects(s.coverage_geom,
-                              st_makeenvelope($1, $2, $3, $4, 4326)::geography)) as covered,
+                              ${bboxEnvelope()})) as covered,
             s.coverage_note as note
        from sources s where s.id = 'nws'`,
     bbox as unknown[],
@@ -71,7 +72,7 @@ export async function getAlerts(opts: {
       where e.kind = 'nws_alert'
         and e.valid_from <= $5::timestamptz
         and (e.valid_to is null or e.valid_to >= $5::timestamptz)
-        and st_intersects(e.geom, st_makeenvelope($1, $2, $3, $4, 4326)::geography)
+        and st_intersects(e.geom, ${bboxEnvelope()})
       order by e.valid_from desc
       limit 100`,
     [...bbox, at.toISOString()],

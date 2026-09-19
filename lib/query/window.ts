@@ -2,6 +2,7 @@ import { config, type BBox } from "../config";
 import { sql } from "../db";
 import { detailLevelFor, fireLimitsFor, type DetailLevel } from "../lod";
 import { getSourceHealth, type SourceHealth } from "./freshness";
+import { bboxEnvelope, frp, isMonitor, lat, lon, round1, round4, stationName } from "./sql";
 
 /**
  * The timeline payload: everything the map and scrubber need for a time
@@ -81,7 +82,7 @@ export async function getWindow(
   // in the meta, rather than quietly implying completeness.
   const { cap: fireCap, minFrp } = fireLimitsFor(detailLevel, config.lodFireCap);
 
-  const envelope = `st_makeenvelope($1, $2, $3, $4, 4326)::geography`;
+  const envelope = bboxEnvelope();
   const geoArgs = [bbox[0], bbox[1], bbox[2], bbox[3]];
   const timeArgs = [from.toISOString(), to.toISOString()];
 
@@ -92,11 +93,11 @@ export async function getWindow(
         history_tier: string; monitor: boolean;
       }>(
         `select s.id,
-                st_y(s.geom::geometry) as lat,
-                st_x(s.geom::geometry) as lon,
-                coalesce(s.name, 'Station ' || s.id) as name,
+                ${lat("s")} as lat,
+                ${lon("s")} as lon,
+                ${stationName("s")} as name,
                 s.history_tier,
-                coalesce((s.metadata->>'isMonitor')::boolean, false) as monitor
+                ${isMonitor("s")} as monitor
            from stations s
           where s.source_id = 'openaq'
             and st_intersects(s.geom, ${envelope})`,
@@ -118,8 +119,8 @@ export async function getWindow(
       // Wind is a coarse grid; thin it further at continental zoom so the
       // barbs stay legible rather than becoming a smear.
       sql<{ lat: number; lon: number; observed_at: Date; dir: number; speed: number }>(
-        `select st_y(s.geom::geometry) as lat,
-                st_x(s.geom::geometry) as lon,
+        `select ${lat("s")} as lat,
+                ${lon("s")} as lon,
                 d.observed_at,
                 d.value as dir,
                 coalesce(sp.value, 0) as speed
@@ -137,17 +138,17 @@ export async function getWindow(
       ),
 
       sql<{ lat: number; lon: number; valid_from: Date; frp: number }>(
-        `select st_y(e.geom::geometry) as lat,
-                st_x(e.geom::geometry) as lon,
+        `select ${lat("e")} as lat,
+                ${lon("e")} as lon,
                 e.valid_from,
-                coalesce((e.attrs->>'frp')::float, 0) as frp
+                ${frp("e")} as frp
            from events e
           where e.kind = 'fire_detection'
             and e.valid_from >= $5::timestamptz
             and e.valid_from <  $6::timestamptz
-            and coalesce((e.attrs->>'frp')::float, 0) >= $7
+            and ${frp("e")} >= $7
             and st_intersects(e.geom, ${envelope})
-          order by coalesce((e.attrs->>'frp')::float, 0) desc
+          order by ${frp("e")} desc
           limit $8`,
         [...geoArgs, ...timeArgs, minFrp, fireCap],
       ),
@@ -210,8 +211,8 @@ export async function getWindow(
     if (!reporting.has(id)) continue;
     stationIndex.set(id, stations.id.length);
     stations.id.push(id);
-    stations.lat.push(round(s.lat));
-    stations.lon.push(round(s.lon));
+    stations.lat.push(round4(s.lat));
+    stations.lon.push(round4(s.lon));
     stations.name.push(s.name);
     stations.tier.push(s.history_tier);
     stations.monitor.push(s.monitor);
@@ -229,7 +230,7 @@ export async function getWindow(
     if (si === undefined) continue;
     const h = hourIndex(r.observed_at, from);
     if (h < 0 || h >= hours) continue;
-    const v = Math.round(Number(r.value) * 10) / 10;
+    const v = round1(Number(r.value));
     pm25.station.push(si);
     pm25.hour.push(h);
     pm25.value.push(v);
@@ -245,8 +246,8 @@ export async function getWindow(
     const h = hourIndex(r.observed_at, from);
     if (h < 0 || h >= hours) continue;
     if (h % windStride !== 0) continue;
-    wind.lat.push(round(r.lat));
-    wind.lon.push(round(r.lon));
+    wind.lat.push(round4(r.lat));
+    wind.lon.push(round4(r.lon));
     wind.hour.push(h);
     wind.dir.push(Math.round(Number(r.dir)));
     wind.speed.push(Math.round(Number(r.speed)));
@@ -258,10 +259,10 @@ export async function getWindow(
   for (const r of fireRows) {
     const h = hourIndex(r.valid_from, from);
     if (h < 0 || h >= hours) continue;
-    fires.lat.push(round(r.lat));
-    fires.lon.push(round(r.lon));
+    fires.lat.push(round4(r.lat));
+    fires.lon.push(round4(r.lon));
     fires.hour.push(h);
-    fires.frp.push(Math.round(Number(r.frp) * 10) / 10);
+    fires.frp.push(round1(Number(r.frp)));
     firesByHour[h]++;
   }
 
@@ -298,14 +299,10 @@ export async function getWindow(
     activity: {
       fires: firesByHour,
       meanPm25: sumByHour.map((s, i) =>
-        countByHour[i] > 0 ? Math.round((s / countByHour[i]) * 10) / 10 : null,
+        countByHour[i] > 0 ? round1(s / countByHour[i]) : null,
       ),
       maxPm25: maxByHour.map((v) => (v < 0 ? null : v)),
     },
   };
 }
 
-/** ~11 m precision, far finer than a 375 m VIIRS pixel — free payload savings. */
-function round(n: number): number {
-  return Math.round(n * 1e4) / 1e4;
-}

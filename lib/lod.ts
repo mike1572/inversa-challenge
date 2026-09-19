@@ -15,7 +15,7 @@ const REGIONAL_AT = 3;
 /** Crossing back costs 15% more travel than crossing forward. */
 const HYSTERESIS = 0.15;
 
-export function spanOf(b: BBox): number {
+function spanOf(b: BBox): number {
   return Math.max(Math.abs(b[2] - b[0]), Math.abs(b[3] - b[1]));
 }
 
